@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "YouTube TLDR",
+  "version": "1.0",
+  "description": "AI-powered summaries for YouTube videos",
+  "permissions": ["activeTab", "storage", "notifications", "identity"],
+  "host_permissions": [
+    "http://localhost:3000/*",
+    "https://*.youtube.com/*"
+  ],
+  "externally_connectable": {
+    "matches": [
+      "http://localhost:3000/*"
+    ]
+  },
+  "oauth2": {
+    "client_id": "YOUR_CLIENT_ID_HERE.apps.googleusercontent.com",
+    "scopes": ["https://www.googleapis.com/auth/userinfo.email"]
+  },
+  "content_scripts": [{
+    "matches": ["https://*.youtube.com/*"],
+    "css": ["styles.css"],
+    "js": ["content.js"]
+  }],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon.jpg",
+      "48": "icon.jpg",
+      "128": "icon.jpg"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "128": "icon.jpg"
+  }
+} 

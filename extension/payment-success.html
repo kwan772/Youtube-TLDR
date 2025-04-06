@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Payment Successful</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      text-align: center;
+      background-color: #f8f9fa;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+    }
+    .container {
+      background-color: white;
+      padding: 30px;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+      max-width: 500px;
+      width: 90%;
+    }
+    h1 {
+      color: #4CAF50;
+      margin-bottom: 20px;
+    }
+    p {
+      color: #555;
+      line-height: 1.6;
+      margin-bottom: 20px;
+    }
+    .loader {
+      border: 4px solid #f3f3f3;
+      border-top: 4px solid #4CAF50;
+      border-radius: 50%;
+      width: 30px;
+      height: 30px;
+      animation: spin 2s linear infinite;
+      margin: 20px auto;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    button {
+      background-color: #4285F4;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-weight: bold;
+      margin-top: 10px;
+    }
+    button:hover {
+      background-color: #3367D6;
+    }
+    #error-message {
+      color: #f44336;
+      margin-top: 15px;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Payment Successful!</h1>
+    <p>Thank you for upgrading your YouTube TLDR subscription.</p>
+    <p>Your premium features have been activated.</p>
+    <div id="processing">
+      <p>Processing your payment details...</p>
+      <div class="loader"></div>
+    </div>
+    <div id="complete" style="display: none;">
+      <p>All set! You can now close this tab and return to YouTube.</p>
+      <button id="close-button">Close Tab</button>
+    </div>
+    <div id="error-message">
+      There was an issue processing your payment details. You can still use your premium features,
+      but you may need to restart the extension.
+    </div>
+  </div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      // Extract plan data from URL
+      const urlParams = new URLSearchParams(window.location.search);
+      const plan = urlParams.get('plan') || 'pro';
+      
+      console.log('Payment success page loaded for plan:', plan);
+      
+      // Calculate subscription details
+      const subscriptionDetails = calculateSubscriptionDetails(plan);
+      
+      // Send message to background script to update subscription
+      chrome.runtime.sendMessage({
+        action: 'paymentSuccess',
+        plan: plan,
+        startDate: subscriptionDetails.startDate,
+        expiryDate: subscriptionDetails.expiryDate
+      }, function(response) {
+        // Check if we got a response
+        const error = chrome.runtime.lastError;
+        if (error) {
+          console.error('Error sending payment success message:', error);
+          showError();
+        } else if (response && response.success) {
+          console.log('Payment success message acknowledged by background script');
+          showComplete();
+        } else {
+          console.warn('Background script did not acknowledge payment success message');
+          showError();
+        }
+      });
+      
+      // Close button handler
+      document.getElementById('close-button').addEventListener('click', function() {
+        window.close();
+      });
+      
+      // Fallback to show complete after 5 seconds
+      setTimeout(function() {
+        showComplete();
+      }, 5000);
+    });
+
+    function calculateSubscriptionDetails(plan) {
+      const startDate = new Date();
+      const expiryDate = new Date();
+      
+      // Set expiry date based on plan (30 days for pro, 365 days for premium)
+      if (plan === 'premium') {
+        expiryDate.setDate(expiryDate.getDate() + 365); // 1 year
+      } else {
+        expiryDate.setDate(expiryDate.getDate() + 30); // 30 days
+      }
+      
+      return {
+        startDate: startDate.toISOString(),
+        expiryDate: expiryDate.toISOString()
+      };
+    }
+    
+    function showComplete() {
+      document.getElementById('processing').style.display = 'none';
+      document.getElementById('complete').style.display = 'block';
+    }
+    
+    function showError() {
+      document.getElementById('processing').style.display = 'none';
+      document.getElementById('complete').style.display = 'block';
+      document.getElementById('error-message').style.display = 'block';
+    }
+  </script>
+</body>
+</html> 

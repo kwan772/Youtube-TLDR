@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YouTube TLDR</title>
+  <script src="popup.js" defer></script>
+  <style>
+    :root {
+      --primary-color: #4a6cf7;
+      --primary-hover: #3152d4;
+      --text-color: #333;
+      --text-secondary: #666;
+      --bg-color: #f9f9f9;
+      --card-bg: #fff;
+      --divider: #eee;
+      --success: #4caf50;
+      --error: #ff6b6b;
+    }
+    
+    body.dark-theme {
+      --primary-color: #5a77ff;
+      --primary-hover: #6b84f8;
+      --text-color: #eee;
+      --text-secondary: #aaa;
+      --bg-color: #282c34;
+      --card-bg: #363a43;
+      --divider: #404550;
+    }
+    
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: var(--text-color);
+      background-color: var(--bg-color);
+      width: 350px;
+      height: 500px;
+      overflow-y: auto;
+    }
+    
+    .container {
+      padding: 20px;
+    }
+    
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--divider);
+      margin-bottom: 20px;
+    }
+    
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .logo img {
+      width: 32px;
+      height: 32px;
+    }
+    
+    .logo-text {
+      font-size: 20px;
+      font-weight: bold;
+    }
+    
+    .tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+      border-bottom: 1px solid var(--divider);
+      width: 100%;
+    }
+    
+    .tab {
+      padding: 8px 16px;
+      background: transparent;
+      border: none;
+      color: var(--text-color);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      font-weight: 500;
+      transition: all 0.2s;
+      flex: 1;
+      text-align: center;
+    }
+    
+    .tab:hover {
+      border-bottom-color: var(--divider);
+    }
+    
+    .tab.active {
+      border-bottom-color: var(--primary-color);
+      color: var(--primary-color);
+    }
+    
+    .content-section {
+      display: none;
+    }
+    
+    .content-section.active {
+      display: block;
+    }
+    
+    #loading {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 300px;
+    }
+    
+    .spinner {
+      width: 40px;
+      height: 40px;
+      border: 3px solid rgba(0,0,0,0.1);
+      border-radius: 50%;
+      border-top-color: var(--primary-color);
+      animation: spin 1s linear infinite;
+      margin-bottom: 16px;
+    }
+    
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    
+    /* Subscription Section */
+    .current-plan {
+      background: var(--card-bg);
+      border-radius: 8px;
+      padding: 16px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+      margin-bottom: 20px;
+    }
+    
+    .plan-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    
+    .plan-name {
+      font-weight: bold;
+      font-size: 18px;
+    }
+    
+    /* Hide price in subscription tab, but keep it visible in plans tab */
+    #subscription-section .plan-price {
+      display: none;
+    }
+    
+    .plan-price {
+      color: var(--primary-color);
+      font-weight: bold;
+      font-size: 24px;
+    }
+    
+    #plan-expiry {
+      font-size: 14px;
+      color: var(--text-secondary);
+      margin-bottom: 16px;
+    }
+    
+    .usage-stats {
+      margin-top: 16px;
+    }
+    
+    .usage-header {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    
+    #current-usage {
+      font-weight: bold;
+    }
+    
+    #usage-limit {
+      color: var(--text-secondary);
+      font-size: 14px;
+    }
+    
+    .usage-bar-container {
+      width: 100%;
+      height: 8px;
+      background: var(--divider);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    
+    #usage-bar {
+      height: 100%;
+      background: var(--primary-color);
+      border-radius: 4px;
+      transition: width 0.5s;
+    }
+    
+    .feature-item {
+      display: flex;
+      align-items: center;
+      margin-bottom: 8px;
+      margin-top: 8px;
+    }
+    
+    .feature-icon {
+      color: var(--primary-color);
+      margin-right: 8px;
+    }
+    
+    .subscribe-btn, .button {
+      background: var(--primary-color);
+      color: white;
+      border: none;
+      padding: 10px 16px;
+      border-radius: 4px;
+      font-weight: 500;
+      cursor: pointer;
+      width: 100%;
+      margin-top: 16px;
+      transition: background 0.2s;
+    }
+    
+    .subscribe-btn:hover, .button:hover {
+      background: var(--primary-hover);
+    }
+    
+    .subscribe-btn:disabled {
+      background: var(--divider);
+      color: var(--text-secondary);
+      cursor: not-allowed;
+    }
+    
+    /* Plans Section */
+    .plans-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 16px;
+      margin-top: 16px;
+    }
+    
+    .plan-card {
+      background: var(--card-bg);
+      border-radius: 8px;
+      padding: 16px;
+      border: 1px solid var(--divider);
+      transition: transform 0.2s, box-shadow 0.2s;
+      cursor: pointer;
+    }
+    
+    .plan-card:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+    }
+    
+    .plan-card.current {
+      border-color: var(--primary-color);
+      box-shadow: 0 0 0 1px var(--primary-color);
+    }
+    
+    .plan-features {
+      margin: 12px 0;
+      list-style: none;
+    }
+    
+    .plan-features li {
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+    }
+    
+    .plan-features li::before {
+      content: "✓";
+      color: var(--primary-color);
+      margin-right: 8px;
+    }
+    
+    /* Error message styling */
+    .error-box {
+      background-color: #ffdddd;
+      border: 1px solid #ff6b6b;
+      border-radius: 4px;
+      padding: 10px;
+      margin-bottom: 16px;
+      color: #333;
+    }
+
+    /* Success message styling */
+    .success-box {
+      background-color: #ddffdd;
+      border: 1px solid #4caf50;
+      border-radius: 4px;
+      padding: 10px;
+      margin-bottom: 16px;
+      color: #333;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="logo">
+        <div class="logo-text">YouTube TLDR</div>
+      </div>
+    </div>
+    
+    <!-- Add subscription info container -->
+    <div id="subscription-info" style="display: none;"></div>
+    
+    <div class="tabs">
+      <button class="tab active" data-tab="subscription">My Subscription</button>
+      <button class="tab" data-tab="plans">Upgrade Plans</button>
+    </div>
+    
+    <div id="loading">
+      <div class="spinner"></div>
+      <p>Loading your subscription information...</p>
+    </div>
+    
+    <div id="subscription-section" class="content-section active" style="display: none;">
+      <div class="current-plan">
+        <div class="plan-header">
+          <div id="current-plan-name" class="plan-name">Free Tier</div>
+          <div id="current-plan-price" class="plan-price">$0/mo</div>
+        </div>
+        <div id="plan-expiry">No active subscription</div>
+        
+        <div class="usage-stats">
+          <div class="usage-header">
+            <div id="current-usage">0 summaries</div>
+            <div id="usage-limit">of 5 in free tier</div>
+          </div>
+          <div class="usage-bar-container">
+            <div id="usage-bar" style="width: 0%;"></div>
+          </div>
+        </div>
+        
+        <div id="current-plan-features" class="feature-list">
+          <!-- Features will be populated dynamically -->
+        </div>
+        
+        <button id="upgrade-btn" class="subscribe-btn">Upgrade Plan</button>
+      </div>
+    </div>
+    
+    <div id="plans-section" class="content-section" style="display: none;">
+      
+      <div class="plans-grid">
+        <div class="plan-card" data-plan="free">
+          <div class="plan-header">
+            <div class="plan-name">Free Tier</div>
+            <div class="plan-price">$0/mo</div>
+          </div>
+          <p>Basic access for casual users</p>
+          <ul class="plan-features">
+            <li>5 video summaries per month</li>
+            <li>Basic AI model</li>
+            <li>Standard summary length</li>
+          </ul>
+          <button id="free-btn" class="subscribe-btn" disabled>Current Plan</button>
+        </div>
+        
+        <div class="plan-card" data-plan="pro">
+          <div class="plan-header">
+            <div class="plan-name">Pro Plan</div>
+            <div class="plan-price">$3.99/mo</div>
+          </div>
+          <p>Unlimited access for regular users</p>
+          <ul class="plan-features">
+            <li>Unlimited summaries</li>
+            <li>Enhanced AI model</li>
+            <li>Priority support</li>
+          </ul>
+          <button id="pro-btn" class="subscribe-btn">Upgrade to Pro</button>
+        </div>
+        
+        <div class="plan-card" data-plan="premium">
+          <div class="plan-header">
+            <div class="plan-name">Premium Plan</div>
+            <div class="plan-price">$8.99/mo</div>
+          </div>
+          <p>All features for power users</p>
+          <ul class="plan-features">
+            <li>Unlimited summaries</li>
+            <li>Enhanced AI model</li>
+            <li>Custom summary length</li>
+            <li>Download summaries</li>
+            <li>YouTube Channel analysis</li>
+          </ul>
+          <button id="premium-btn" class="subscribe-btn">Upgrade to Premium</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html> 
