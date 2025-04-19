@@ -27,10 +27,6 @@ chrome.runtime.onMessageExternal.addListener(function(request, sender, sendRespo
         }, function() {
           console.log('Subscription data saved successfully');
           
-          // Update badge to show subscription is active
-          chrome.action.setBadgeText({ text: "PRO" });
-          chrome.action.setBadgeBackgroundColor({ color: "#4CAF50" });
-          
           // Try to open the popup to show the updated subscription status
           try {
             chrome.action.openPopup().catch(error => {
@@ -74,18 +70,23 @@ chrome.runtime.onMessageExternal.addListener(function(request, sender, sendRespo
       });
     }
     
-    // Try to open the popup directly
-    try {
-      chrome.action.openPopup().catch(error => {
-        console.log('Could not open popup directly, opening in a new tab instead');
-        // Open popup in a new tab as fallback
+    // Store the display tab preference in storage
+    chrome.storage.local.set({ 
+      displayTab: "plans" // Store which tab should be displayed when popup opens
+    }, function() {
+      // Try to open the popup directly
+      try {
+        chrome.action.openPopup().catch(error => {
+          console.log('Could not open popup directly, opening in a new tab instead');
+          // Open popup in a new tab as fallback
+          openPopupInNewTab();
+        });
+      } catch (e) {
+        console.error('Error trying to open popup:', e);
+        // Open in a new tab as fallback
         openPopupInNewTab();
-      });
-    } catch (e) {
-      console.error('Error trying to open popup:', e);
-      // Open in a new tab as fallback
-      openPopupInNewTab();
-    }
+      }
+    });
     
     // Send a response to acknowledge receiving the message
     sendResponse({ success: true });
@@ -99,9 +100,9 @@ chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
   
   if (request.action === "openPopup") {
     // Store the selected plan in storage for the popup to access
-    chrome.storage.local.set({ selectedPlan: request.plan }, function() {
-      console.log('Selected plan stored:', request.plan);
-      
+    chrome.storage.local.set({ 
+      displayTab: "plans" // Store which tab should be displayed when popup opens
+    }, function() {
       // Try to open the popup directly (may not work due to Chrome restrictions)
       chrome.action.openPopup().catch(error => {
         console.log('Could not open popup directly, opening in a new tab instead');
@@ -140,10 +141,6 @@ chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
         }, function() {
           console.log('Subscription data saved successfully');
           
-          // Update badge to show subscription is active
-          chrome.action.setBadgeText({ text: "PRO" });
-          chrome.action.setBadgeBackgroundColor({ color: "#4CAF50" });
-          
           // Try to open the popup to show the updated subscription status
           try {
             chrome.action.openPopup().catch(error => {
@@ -177,6 +174,37 @@ chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
     // Send response to acknowledge
     sendResponse({ success: true });
     return true; // Keep message channel open for async response
+  }
+});
+
+// Listen for messages from content scripts
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.action === "getAuthToken") {
+    chrome.identity.getAuthToken({ interactive: message.interactive }, async function(token) {
+      if (chrome.runtime.lastError) {
+        sendResponse({ error: chrome.runtime.lastError.message });
+        return;
+      }
+      
+      try {
+        // Use the token to fetch the user's email
+        const response = await fetch('https://www.googleapis.com/oauth2/v1/userinfo?alt=json', {
+          headers: { Authorization: 'Bearer ' + token }
+        });
+        
+        if (!response.ok) {
+          throw new Error('Failed to fetch user info');
+        }
+        
+        const data = await response.json();
+        sendResponse({ email: data.email });
+      } catch (error) {
+        sendResponse({ error: error.message });
+      }
+    });
+    
+    // Return true to indicate you wish to send a response asynchronously
+    return true;
   }
 });
 
@@ -226,7 +254,7 @@ function checkSubscriptionStatus() {
         chrome.action.setBadgeText({ text: "" });
       } else {
         // Update badge for active subscription
-        chrome.action.setBadgeText({ text: "PRO" });
+        chrome.action.setBadgeText({ text: "" });
         chrome.action.setBadgeBackgroundColor({ color: "#4CAF50" });
       }
     }

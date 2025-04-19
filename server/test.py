@@ -113,6 +113,10 @@ def test_transcript(video_id):
         return None
 
 if __name__ == "__main__":
-    VIDEO_ID = "uGrBHohIgQY"  # The video ID you're having trouble with
-    print(f"Testing transcript fetch for video: {VIDEO_ID}")
-    transcript = test_transcript(VIDEO_ID)
+    # VIDEO_ID = "uGrBHohIgQY"  # The video ID you're having trouble with
+    # print(f"Testing transcript fetch for video: {VIDEO_ID}")
+    # transcript = test_transcript(VIDEO_ID)
+
+    from cryptography.fernet import Fernet
+    key = Fernet.generate_key()
+    print(key.decode())

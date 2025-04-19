@@ -12,168 +12,203 @@ let previewBlockingActive = false;
 // User ID for tracking usage
 let userId = null;
 
+// Helper function to check if a string is an email address
+function isEmail(str) {
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(str);
+}
+
+// Function to clear any non-email IDs from storage
+async function clearNonEmailIds() {
+  try {
+    const storedId = await new Promise(resolve => {
+      chrome.storage.local.get(['tldrUserId'], function(result) {
+        resolve(result.tldrUserId || null);
+      });
+    });
+    
+    if (storedId && !isEmail(storedId)) {
+      console.log('Found non-email ID in storage, clearing it:', storedId);
+      chrome.storage.local.remove(['tldrUserId'], function() {
+        console.log('Cleared non-email ID from storage');
+      });
+    }
+  } catch (error) {
+    console.error('Error checking stored ID:', error);
+  }
+}
+
+// Clear any non-email IDs at startup
+clearNonEmailIds();
+
 // Initialize user identification
 initializeUserId();
 
-// Function to generate or retrieve user ID
+// Function to initialize user identification
 async function initializeUserId() {
   try {
-    // First check if we have a user ID in storage
-    chrome.storage.local.get(['tldrUserId'], function(result) {
-      if (result.tldrUserId) {
-        userId = result.tldrUserId;
-        console.log('Retrieved existing user ID:', userId);
-      } else {
-        // Generate a new unique ID
-        userId = generateUniqueId();
-        // Store it for future use
-        chrome.storage.local.set({tldrUserId: userId}, function() {
-          console.log('Generated and saved new user ID:', userId);
-        });
+    console.log('Initializing user identification');
+    
+    // First attempt to get email with interactive auth regardless of stored ID
+    console.log('Trying to authenticate user with Chrome Identity API');
+    const email = await getAuthenticatedUserEmail(true); // Set to true for interactive login
+    
+    if (email) {
+      userId = email;
+      console.log('User authenticated with email:', userId);
+      
+      return;
+    }
+    
+    // Email authentication failed, try one more time with explicit interactive auth
+    console.log('Authentication failed, trying explicit interactive authentication');
+    try {
+      const interactiveEmail = await getAuthenticatedUserEmail(true); // Force interactive authentication
+      if (interactiveEmail) {
+        userId = interactiveEmail;
+        console.log('Successfully authenticated with interactive prompt:', userId);
+        return;
       }
-    });
+      
+      console.log('Interactive authentication also failed');
+    } catch (interactiveError) {
+      console.error('Interactive authentication error:', interactiveError);
+    }
+    
+    // If we still couldn't get an email, log the failure
+    console.error('Failed to get user email after multiple attempts');
+    
   } catch (error) {
-    console.error('Error initializing user ID:', error);
-    // Fallback to generating a new ID if storage access fails
-    userId = generateUniqueId();
+    console.error('Error in user authentication:', error);
   }
 }
 
-// Function to generate a unique ID for the user
-function generateUniqueId() {
-  return 'tldr_' + Math.random().toString(36).substring(2, 15) + 
-         Math.random().toString(36).substring(2, 15);
+// Helper function to get current user email - to be called when needed
+async function getCurrentUserEmail() {
+  try {
+    // Always try to get a fresh email directly from Chrome Identity API first
+    console.log('Attempting to get user email from Chrome Identity API');
+    const email = await getAuthenticatedUserEmail(true); // Always use interactive authentication
+    
+    if (email) {
+      // If we got an actual email, return it immediately without caching
+      console.log('Successfully retrieved email from Chrome Identity API:', email);
+      return email;
+    }
+    
+    console.error('Failed to get email from Chrome Identity API');
+    return null;
+  } catch (error) {
+    console.error('Error getting current user email:', error);
+    return null;
+  }
 }
 
-// Check if user has reached usage limits
-async function checkUsageLimits() {
-  try {
-    // First check if user has an active subscription in local storage
-    return new Promise((resolve) => {
-      chrome.storage.local.get(['subscription'], function(result) {
-        if (result.subscription) {
-          // We have a subscription, check if it's still valid
-          const now = new Date();
-          const expiryDate = new Date(result.subscription.expiryDate);
-          
-          if (now < expiryDate) {
-            console.log('Found active subscription, bypassing usage limits check');
-            // User has a valid subscription, no limits apply
-            resolve({ hasReachedLimit: false });
-            return;
-          } else {
-            console.log('Subscription found but expired:', expiryDate);
-          }
+// Function to get authenticated user email using Chrome Identity API
+async function getAuthenticatedUserEmail(interactive = false) {
+  return new Promise((resolve, reject) => {
+    // Use message passing to communicate with the background script
+    chrome.runtime.sendMessage(
+      { action: "getAuthToken", interactive: interactive },
+      function(response) {
+        if (response.error) {
+          console.error("Error getting auth token:", response.error);
+          reject(response.error);
+        } else {
+          resolve(response.email);
         }
-        
-        // No valid subscription found, check regular usage limits
-        // Pass subscription data to the server (even if expired) so it knows what to do
-        checkRegularUsageLimitsWithSubscription(result.subscription).then(resolve);
-      });
-    });
-  } catch (error) {
-    console.error('Subscription check failed:', error);
-    // If check fails, default to regular usage check
-    return checkRegularUsageLimitsWithSubscription(null);
-  }
+      }
+    );
+  });
 }
 
-// Regular usage check with subscription data included
-async function checkRegularUsageLimitsWithSubscription(subscriptionData) {
+// Helper function to fetch user info with a token
+async function fetchUserInfo(token) {
+  // Get user info from Google
+  const response = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+    headers: { 'Authorization': `Bearer ${token}` }
+  });
+  
+  if (!response.ok) {
+    throw new Error(`Failed to get user info: ${response.status}`);
+  }
+  
+  return await response.json();
+}
+
+// Function to check usage and update UI accordingly
+async function checkUsage() {
   try {
-    if (!userId) {
-      // Generate a temporary ID if none exists yet
-      const tempId = generateUniqueId();
-      console.log('Using temporary ID for usage check:', tempId);
-      
-      const response = await fetch(`${USAGE_API_URL}?userId=${tempId}`, {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' }
-      });
-      
-      // For a new user, they should be under limits
-      return { hasReachedLimit: false };
+    console.log('Checking usage status');
+    
+    // Get user email first
+    const email = await getCurrentUserEmail();
+    
+    if (!email) {
+      console.warn('No user email available, cannot check usage');
+      return { hasReachedLimit: true, isFreeUser: true }; // Default to allowing usage if can't determine user
     }
     
-    // Add subscription data to query params if available
-    let url = `${USAGE_API_URL}?userId=${userId}`;
-    
-    if (subscriptionData) {
-      // Format subscription data as JSON and add to URL
-      const expiryDate = new Date(subscriptionData.expiryDate);
-      const subscription = JSON.stringify({
-        plan: subscriptionData.plan,
-        expiryDate: expiryDate.toISOString()
-      });
-      
-      url += `&subscription=${encodeURIComponent(subscription)}`;
-      console.log('Including subscription in usage check:', subscription);
-    }
-    
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: { 'Content-Type': 'application/json' }
-    });
+    const response = await fetch(`${USAGE_API_URL}?email=${encodeURIComponent(email)}`);
     
     if (!response.ok) {
-      // If the server cannot be reached, default to allowing usage
-      console.error('Usage check error:', response.status);
-      return { hasReachedLimit: false };
+      console.error('Error checking usage:', response.status);
+      return { hasReachedLimit: false, isFreeUser: true }; // Default to allowing usage if API fails
     }
     
-    return await response.json();
-  } catch (error) {
-    console.error('Usage check failed:', error);
-    // If check fails, default to allowing usage to avoid blocking paid users
-    return { hasReachedLimit: false };
-  }
-}
-
-// Update usage on the server
-async function trackUsage(videoId) {
-  try {
-    if (!userId) return;
+    const data = await response.json();
+    console.log('Usage data:', data);
     
-    // Check if user has an active subscription
-    const subscriptionData = await new Promise(resolve => {
-      chrome.storage.local.get(['subscription'], function(result) {
-        if (result.subscription) {
-          const now = new Date();
-          const expiryDate = new Date(result.subscription.expiryDate);
+    const hasSubscription = data.subscription ? true : false;
+    
+    // If user has reached limit, show upgrade popup
+    if (data.hasReachedLimit) {
+      // Find the current popup if it exists
+      const currentPopup = document.querySelector('.tldr-popup[style*="display: block"]');
+      if (currentPopup) {
+        const content = currentPopup.querySelector('.tldr-content');
+        if (content) {
+          // Show usage limit message with upgrade button
+          content.innerHTML = `
+            <div class="upgrade-container">
+              <h3>Usage Limit Reached</h3>
+              <p>You've used all your free summaries for this month.</p>
+              <p>Current usage: ${data.usage.current}/${data.usage.limit}</p>
+              <button class="tldr-upgrade-button">Upgrade Now</button>
+            </div>
+          `;
           
-          if (now < expiryDate) {
-            // User has a valid subscription
-            console.log('Including subscription info in usage tracking:', result.subscription.plan);
-            resolve(result.subscription);
-            return;
+          // Add click handler for upgrade button
+          const upgradeButton = content.querySelector('.tldr-upgrade-button');
+          if (upgradeButton) {
+            upgradeButton.addEventListener('click', (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              
+              // Close current popup
+              const popupContainer = content.closest('.tldr-popup');
+              if (popupContainer) {
+                popupContainer.style.display = 'none';
+              }
+              
+              // Open the extension popup instead of the Chrome Web Store
+              chrome.runtime.sendMessage({ action: "openPopup", plan: "pro" });
+              console.log('Requested to open extension popup for plan: pro');
+            });
           }
         }
-        resolve(null);
-      });
-    });
-    
-    const requestData = { userId, videoId };
-    
-    // Include subscription data in the API request if available
-    if (subscriptionData) {
-      // Ensure we're sending the expiry date in a consistent format
-      const expiryDate = new Date(subscriptionData.expiryDate);
-      
-      requestData.subscription = {
-        plan: subscriptionData.plan,
-        expiryDate: expiryDate.toISOString() // Always use ISO format for consistent timezone handling
-      };
-      
-      console.log('Sending subscription data to server:', requestData.subscription);
+      }
     }
     
-    await fetch(USAGE_API_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestData)
-    });
+    return {
+      hasReachedLimit: data.hasReachedLimit,
+      isFreeUser: !hasSubscription,
+      usageData: data.usage,
+      subscriptionData: data.subscription
+    };
   } catch (error) {
-    console.error('Failed to track usage:', error);
+    console.error('Error checking usage:', error);
+    return { hasReachedLimit: false, isFreeUser: true }; // Default to allowing usage in case of error
   }
 }
 
@@ -371,16 +406,29 @@ function formatAISummary(summaryText, videoId) {
       
       if (timestampMatch) {
         const timestamp = timestampMatch[1];
+        
+        // Format timestamp - remove hours part if it's zero
+        let formattedTimestamp = timestamp;
+        
+        // Check if timestamp is in HH:MM:SS format
+        const timeRegex = /^(\d{2}):(\d{2}):(\d{2})$/;
+        const match = timestamp.match(timeRegex);
+        
+        if (match && match[1] === '00') {
+            // If hours are 00, reduce to MM:SS format
+            formattedTimestamp = `${match[2]}:${match[3]}`;
+        }
+        
         const description = timestampMatch[3].trim();
-        const timeInSeconds = convertTimestampToSeconds(timestamp);
+        const timeInSeconds = convertTimestampToSeconds(formattedTimestamp);
         const videoUrl = `https://www.youtube.com/watch?v=${videoId}&t=${timeInSeconds}s`;
         
-        console.log(`Found timestamp: ${timestamp}, description: ${description}`);
+        console.log(`Found timestamp: ${formattedTimestamp}, description: ${description}`);
         
         highlightsHTML += `
           <div class="highlight-row">
             <a href="${videoUrl}" class="timestamp-link">
-              <span class="timestamp">${timestamp}</span>
+              <span class="timestamp">${formattedTimestamp}</span>
             </a>
             <span class="highlight-description">${description}</span>
           </div>
@@ -538,52 +586,38 @@ function makeTimestampsClickable(summaryContainer, videoId) {
 async function getSummary(videoId, transcript, content) {
   try {
     // Check usage limits before generating summary
-    const usageStatus = await checkUsageLimits();
+    const usageStatus = await checkUsage();
+    console.log("usageStatus", usageStatus)
     
     if (usageStatus.hasReachedLimit) {
       // Show upgrade popup if user has reached limit
-      content.innerHTML = '';
+      content.innerHTML = `
+        <div class="upgrade-container">
+          <h3>Usage Limit Reached</h3>
+          <p>You've used all your free summaries for this month.</p>
+          <p>Current usage: ${usageStatus.usageData?.current || 0}/${usageStatus.usageData?.limit || 0}</p>
+          <button class="tldr-upgrade-button">Upgrade Now</button>
+        </div>
+      `;
       
-      // Find the closest popup container
-      const popupContainer = content.closest('.tldr-popup');
-      if (popupContainer) {
-        // Hide the regular popup
-        popupContainer.style.display = 'none';
-        
-        // Show the upgrade popup in the appropriate location
-        const upgradePopup = createUpgradePopup();
-        
-        // Get container positioning
-        const container = popupContainer.parentElement;
-        container.appendChild(upgradePopup);
-        
-        // Match the original popup's positioning
-        upgradePopup.style.position = popupContainer.style.position;
-        upgradePopup.style.top = popupContainer.style.top;
-        upgradePopup.style.left = popupContainer.style.left;
-        upgradePopup.style.right = popupContainer.style.right;
-        upgradePopup.style.bottom = popupContainer.style.bottom;
-        upgradePopup.style.zIndex = popupContainer.style.zIndex;
-        
-        upgradePopup.style.display = 'block';
-      } else {
-        // Fallback if no popup container found
-        const body = document.body;
-        const upgradePopup = createUpgradePopup();
-        
-        // Style for center of screen
-        upgradePopup.style.position = 'fixed';
-        upgradePopup.style.top = '50%';
-        upgradePopup.style.left = '50%';
-        upgradePopup.style.transform = 'translate(-50%, -50%)';
-        upgradePopup.style.width = '500px';
-        upgradePopup.style.height = 'auto';
-        upgradePopup.style.zIndex = '9999';
-        
-        body.appendChild(upgradePopup);
-        upgradePopup.style.display = 'block';
+      // Add click handler for upgrade button
+      const upgradeButton = content.querySelector('.tldr-upgrade-button');
+      if (upgradeButton) {
+        upgradeButton.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          
+          // Close current popup
+          const popupContainer = content.closest('.tldr-popup');
+          if (popupContainer) {
+            popupContainer.style.display = 'none';
+          }
+          
+          // Open the extension popup instead of the Chrome Web Store
+          chrome.runtime.sendMessage({ action: "openPopup", plan: "pro" });
+          console.log('Requested to open extension popup for plan: pro');
+        });
       }
-      
       return;
     }
     
@@ -594,38 +628,11 @@ async function getSummary(videoId, transcript, content) {
       </div>
     `;
 
-    // First check if user has an active subscription in local storage
-    const subscriptionData = await new Promise(resolve => {
-      chrome.storage.local.get(['subscription'], function(result) {
-        if (result.subscription) {
-          const now = new Date();
-          const expiryDate = new Date(result.subscription.expiryDate);
-          
-          if (now < expiryDate) {
-            // User has a valid subscription
-            console.log('Including subscription info in API request:', result.subscription.plan);
-            resolve(result.subscription);
-            return;
-          }
-        }
-        resolve(null);
-      });
-    });
+    // Get current user email directly from Chrome Identity API
+    const userIdentifier = await getCurrentUserEmail();
 
-    const requestData = { videoId, transcript, userId };
-    
-    // Include subscription data in the API request if available
-    if (subscriptionData) {
-      // Ensure we're sending the expiry date in a consistent format
-      const expiryDate = new Date(subscriptionData.expiryDate);
-      
-      requestData.subscription = {
-        plan: subscriptionData.plan,
-        expiryDate: expiryDate.toISOString() // Always use ISO format for consistent timezone handling
-      };
-      
-      console.log('Sending subscription data in summary request:', requestData.subscription);
-    }
+    // Simple request with just the necessary data
+    const requestData = { videoId, transcript, userId: userIdentifier };
 
     // Create a container for the summary before making the fetch
     content.innerHTML = `
@@ -701,8 +708,7 @@ async function getSummary(videoId, transcript, content) {
               
               if (data.done) {
                 // Summary is complete
-                // Track usage after successful summary generation
-                trackUsage(videoId).catch(err => console.error('Error tracking usage:', err));
+                // Remove redundant tracking - backend already tracks usage in the /summary endpoint
                 break;
               }
             } catch (e) {
@@ -1178,6 +1184,15 @@ function addSummaryButtons() {
         return;
       }
       
+      // Get the CURRENT video ID right when the button is clicked
+      const currentVideoId = extractVideoId(window.location.href);
+      console.log('Current video ID when sidebar button clicked:', currentVideoId);
+      
+      if (!currentVideoId) {
+        console.error('Could not determine current video ID');
+        return;
+      }
+      
       // Show popup with loading indicator
       const content = sidebarPopup.querySelector('.tldr-content');
       content.innerHTML = `
@@ -1189,10 +1204,10 @@ function addSummaryButtons() {
       sidebarPopup.style.display = 'block';
       
       try {
-        // Fetch transcript
+        // Fetch transcript using current video ID, not the stored one
         let transcript = [];
         try {
-          transcript = await getYouTubeTranscript(videoId);
+          transcript = await getYouTubeTranscript(currentVideoId);
           console.log('Transcript fetched for sidebar summary:', transcript.length, 'segments');
         } catch (error) {
           console.error('Transcript fetch failed:', error);
@@ -1205,7 +1220,7 @@ function addSummaryButtons() {
           `;
         }
 
-        await getSummary(videoId, transcript, content);
+        await getSummary(currentVideoId, transcript, content);
       } catch (error) {
         console.error('Summary generation failed:', error);
         content.innerHTML = `
@@ -1822,71 +1837,38 @@ function createUpgradePopup() {
   
   popup.appendChild(closeButton);
   
-  // Check if user has an active subscription
-  chrome.storage.local.get(['subscription'], function(result) {
-    let content = document.createElement('div');
-    content.className = 'tldr-content tldr-upgrade-content';
-    
-    if (result.subscription) {
-      // Check if it's still valid
-      const now = new Date();
-      const expiryDate = new Date(result.subscription.expiryDate);
-      
-      if (now < expiryDate) {
-        // User has a valid subscription but hit their plan limit
-        const plan = result.subscription.plan;
-        const limit = plan === 'premium' ? 1500 : 400;
-        
-        content.innerHTML = `
-          <div class="tldr-upgrade-container">
-            <h2>Plan Limit Reached</h2>
-            <p>You've used all ${limit} summaries in your ${plan} plan this month.</p>
-            ${plan === 'pro' ? '<button class="tldr-upgrade-button-primary">Upgrade to Premium</button>' : '<p>Check back next month for more summaries.</p>'}
-          </div>
-        `;
-      } else {
-        // Subscription expired - show standard free tier message
-        content.innerHTML = `
-          <div class="tldr-upgrade-container">
-            <h2>Subscription Expired</h2>
-            <p>Your subscription has expired. Renew now to continue enjoying premium features.</p>
-            <button class="tldr-upgrade-button-primary">Renew Subscription</button>
-          </div>
-        `;
-      }
-    } else {
-      // No subscription - free tier limit
-      content.innerHTML = `
-        <div class="tldr-upgrade-container">
-          <h2>Free Limit Reached</h2>
-          <p>You've used all your free AI summaries.</p>
-          <button class="tldr-upgrade-button-primary">Upgrade Now</button>
-        </div>
-      `;
-    }
-    
-    popup.appendChild(content);
-    
-    // Prevent clicks inside popup from propagating
-    popup.addEventListener('mousedown', (e) => {
-      e.stopPropagation();
-    });
-    
-    // Add button click handler
-    const upgradeButton = popup.querySelector('.tldr-upgrade-button-primary');
-    if (upgradeButton) {
-      upgradeButton.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        // Open the extension popup instead of the payment page
-        chrome.runtime.sendMessage({ action: "openPopup" });
-        popup.style.display = 'none';
-      });
-    }
-    
-    // Apply theme after all elements are added
-    applyThemeToPopup(popup);
+  // Create content directly based on free tier limit
+  let content = document.createElement('div');
+  content.className = 'tldr-content tldr-upgrade-content';
+  
+  content.innerHTML = `
+    <div class="tldr-upgrade-container">
+      <h2>Free Limit Reached</h2>
+      <p>You've used all your free AI summaries.</p>
+      <button class="tldr-upgrade-button-primary">Upgrade Now</button>
+    </div>
+  `;
+  
+  popup.appendChild(content);
+  
+  // Prevent clicks inside popup from propagating
+  popup.addEventListener('mousedown', (e) => {
+    e.stopPropagation();
   });
+  
+  // Add button click handler
+  const upgradeButton = popup.querySelector('.tldr-upgrade-button-primary');
+  if (upgradeButton) {
+    upgradeButton.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      // Open the extension popup instead of the payment page
+      chrome.runtime.sendMessage({ action: "openPopup" });
+    });
+  }
+  
+  // Apply theme after all elements are added
+  applyThemeToPopup(popup);
 
   return popup;
 }
@@ -1956,62 +1938,29 @@ function handleUpgradeClick() {
   });
 }
 
-// Function to create and show the summary popup
-function showSummaryPopup(videoId) {
-  // ... existing code ...
+// Add a function to track URL changes and close popup when navigating to new videos
+function setupURLChangeDetection(sidebarPopup) {
+  let lastUrl = location.href;
   
-  // Handle popup result
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.summaryResult) {
-      if (message.summaryResult.requiresPayment) {
-        // User has reached limit, show upgrade button
-        spinner.style.display = 'none';
-        contentElement.innerHTML = `
-          <p>${message.summaryResult.error}</p>
-          <button class="tldr-upgrade-button">Upgrade</button>
-        `;
-        
-        // Add click event for upgrade button
-        contentElement.querySelector('.tldr-upgrade-button').addEventListener('click', () => {
-          // Open the extension popup for subscription management
-          chrome.runtime.sendMessage({ action: "openPopup" });
-          popup.remove();
-        });
-      } else if (message.summaryResult.error) {
-        // ... existing error handling code ...
-      } else {
-        // ... existing success handling code ...
+  // Create an observer to watch for URL changes
+  const urlObserver = new MutationObserver(() => {
+    if (location.href !== lastUrl) {
+      console.log('URL changed from', lastUrl, 'to', location.href);
+      lastUrl = location.href;
+      
+      // Close the popup when navigating to a new page
+      if (sidebarPopup && sidebarPopup.style.display === 'block') {
+        console.log('Closing sidebar popup due to navigation');
+        sidebarPopup.style.display = 'none';
       }
     }
   });
+  
+  // Start observing
+  urlObserver.observe(document, { subtree: true, childList: true });
+  
+  return urlObserver;
 }
 
-// Apply theme to the upgrade popup
-function applyThemeToPopup(popup) {
-  const isDark = isDarkTheme();
-  
-  if (isDark) {
-    // Force dark theme with !important
-    popup.setAttribute('style', 'background-color: #212121 !important; color: #ffffff !important;');
-    
-    const closeButton = popup.querySelector('.tldr-close-button');
-    if (closeButton) {
-      closeButton.setAttribute('style', 'background-color: rgba(255, 255, 255, 0.2) !important; color: white !important;');
-    }
-  } else {
-    // Force light theme with !important
-    popup.setAttribute('style', 'background-color: #f9f9f9 !important; color: #0f0f0f !important;');
-    
-    const closeButton = popup.querySelector('.tldr-close-button');
-    if (closeButton) {
-      closeButton.setAttribute('style', 'background-color: rgba(0, 0, 0, 0.1) !important; color: #606060 !important;');
-    }
-  }
-  
-  // Make sure display property is preserved
-  if (popup.style.display === 'block') {
-    popup.style.display = 'block';
-  } else {
-    popup.style.display = 'none';
-  }
-} 
+// After creating the sidebarPopup element
+setupURLChangeDetection(sidebarPopup);

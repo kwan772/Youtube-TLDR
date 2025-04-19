@@ -3,7 +3,7 @@
   "name": "YouTube TLDR",
   "version": "1.0",
   "description": "AI-powered summaries for YouTube videos",
-  "permissions": ["activeTab", "storage", "notifications", "identity"],
+  "permissions": ["activeTab", "storage", "notifications", "identity","identity.email"],
   "host_permissions": [
     "http://localhost:3000/*",
     "https://*.youtube.com/*"
@@ -14,7 +14,7 @@
     ]
   },
   "oauth2": {
-    "client_id": "YOUR_CLIENT_ID_HERE.apps.googleusercontent.com",
+    "client_id": "1067917006948-vjqctirceif2qh6ehpveel8fh48a2rkb.apps.googleusercontent.com",
     "scopes": ["https://www.googleapis.com/auth/userinfo.email"]
   },
   "content_scripts": [{
